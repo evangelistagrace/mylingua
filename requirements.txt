@@ -1,0 +1,6 @@
+streamlit>=1.31
+sqlalchemy>=2.0
+psycopg[binary]>=3.1
+pgvector>=0.2.5
+python-dotenv>=1.0
+cohere>=5.6
