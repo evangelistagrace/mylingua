@@ -2,6 +2,8 @@
 
 A POC language-learning vocabulary app that lets users search German words by natural-language meaning in English or German. It uses Streamlit for the UI, PostgreSQL with pgvector for storage and vector search, and Cohere embeddings.
 
+![alt text](image.png)
+
 ## Features
 
 - CSV ingestion with embeddings using Cohere embed-multilingual-light-v3.0
