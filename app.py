@@ -47,24 +47,70 @@ def render_sense(sense, distance: float | None = None) -> None:
 
     title = sense.term_de
     if sense.artikel_nominativ:
-        title = f"{sense.artikel_nominativ} {sense.term_de}"
-    st.markdown(f"**{title}** — {sense.translation_en or ''}")
+        title = f"({sense.artikel_nominativ}) {sense.term_de}"
+    gender_label = None
+    if sense.pos == "noun" and sense.artikel_nominativ:
+        article = sense.artikel_nominativ.strip().lower()
+        if article == "der":
+            gender_label = "masculine"
+        elif article == "die":
+            gender_label = "feminine"
+        elif article == "das":
+            gender_label = "neuter"
+
+    badge_parts: list[str] = []
+    if sense.pos:
+        badge_parts.append(
+            "<span style='display:inline-block;padding:2px 10px;border-radius:999px;"
+            "font-size:0.85rem;font-weight:600;background:#e2e8f0;color:#1e3a8a;margin-right:6px;'>"
+            f"{sense.pos}</span>"
+        )
+    if gender_label:
+        gender_styles = {
+            "masculine": "background:#dbeafe;color:#1d4ed8;",
+            "feminine": "background:#fee2e2;color:#b91c1c;",
+            "neuter": "background:#dcfce7;color:#15803d;",
+        }
+        badge_parts.append(
+            "<span style='display:inline-block;padding:2px 10px;border-radius:999px;"
+            f"font-size:0.85rem;font-weight:600;{gender_styles.get(gender_label, '')}'>"
+            f"{gender_label}</span>"
+        )
     definition_de = _strip_reference_numbers(sense.definition_de)
     definition_en = _strip_reference_numbers(sense.definition_en)
     sample_de = _strip_reference_numbers(sense.sample_sentences_de)
-    if sense.pos:
-        st.badge(sense.pos)
-    if definition_de:
-        st.caption(definition_de)
-    elif definition_en:
-        st.caption(definition_en)
-    if sample_de:
-        st.markdown(f"{sample_de}")
+
+    with st.container(border=True):
+        # left, right = st.columns([0.82, 0.18])
+        # with left:
+        st.markdown(f"**{title}**")
+        if sense.translation_en:
+            st.caption(sense.translation_en)
+        # with right:
+        if badge_parts:
+            st.markdown("".join(badge_parts), unsafe_allow_html=True)
+
+        if definition_de:
+            st.write(definition_de)
+        elif definition_en:
+            st.write(definition_en)
+        if sample_de:
+            st.markdown(f"*{sample_de}*")
+
+        # if distance is not None:
+        #     if distance <= 0.9:
+        #         st.caption("High match")
+        #     elif distance <= 1.1:
+        #         st.caption("Medium match")
+        #     else:
+        #         st.caption("Weak match")
 
 
-    # if distance is not None:
-    #     st.caption(f"distance: {distance:.4f}")
-    st.divider()
+def _render_footer() -> None:
+    st.markdown("---")
+    st.caption(
+        "Data sources: Wiktionary, Wikidata, Tatoeba. Embeddings by Cohere."
+    )
 
 
 def _detect_single_word_language(word: str) -> str:
@@ -126,10 +172,24 @@ def _save_word_entry(
         with st.spinner("Embedding and storing..."):
             try:
                 created, updated = ingest_rows(session, [row], batch_size=1)
+                sources_used: list[str] = []
+                if (not user_definition and auto_definition) or (not user_pos and auto_pos) or (
+                    not user_artikel and auto_artikel
+                ):
+                    sources_used.append("Wiktionary")
+                if (not user_translation and auto_translation) or auto_definition_en:
+                    sources_used.append("Wiktionary/Wikidata")
+                if not user_sample and auto_sample:
+                    sources_used.append("Tatoeba/Wiktionary")
+
                 if created:
                     st.success(f"{success_prefix}. The entry is now searchable.")
+                    if sources_used:
+                        st.caption(f"Auto-filled from: {', '.join(sources_used)}")
                 elif updated:
                     st.success("Updated existing entry for this term.")
+                    if sources_used:
+                        st.caption(f"Auto-filled from: {', '.join(sources_used)}")
             except Exception as exc:
                 st.error(f"Save failed: {exc}")
 
@@ -225,11 +285,12 @@ def render_ingest_page() -> None:
                             st.caption(f"Auto-filled missing values for {autofilled_rows} CSV rows.")
                     except Exception as exc:
                         st.error(f"Ingest failed: {exc}")
+    _render_footer()
 
 
 def render_add_word_page() -> None:
     st.subheader("Add a word manually")
-    st.write("`term_de` is required. All other fields are optional.")
+    st.write("`German word` is required. All other fields are optional. Missing fields will be auto-filled where possible.")
 
     if "add_word_term_de_prefill" in st.session_state:
         st.session_state["add_word_term_de"] = st.session_state.pop("add_word_term_de_prefill")
@@ -241,17 +302,17 @@ def render_add_word_page() -> None:
     with st.form("add_word_form", clear_on_submit=True):
         term_de = st.text_input("German word (required)", key="add_word_term_de")
         artikel_nominativ = st.text_input("Artikel (der/die/das, optional)")
-        definition_de = st.text_area("Meaning in German (optional)")
         translation_en = st.text_input(
             "Translation in English (optional)",
             key="add_word_translation_en",
         )
-        sample_sentences_de = st.text_area("Sample sentences in German (optional)")
         pos = st.selectbox(
             "Part of speech (optional)",
             POS_OPTIONS,
             index=0,
         )
+        definition_de = st.text_area("Meaning in German (optional)")
+        sample_sentences_de = st.text_area("Sample sentences in German (optional)")
         submitted = st.form_submit_button("Save word", type="primary")
 
     if submitted:
@@ -263,12 +324,13 @@ def render_add_word_page() -> None:
             sample_sentences_de=sample_sentences_de,
             pos=pos,
         )
+    _render_footer()
 
 
 def render_search_page() -> None:
-    st.subheader("Search by meaning")
+    st.subheader("Search by meaning or word")
 
-    query = st.text_input("Search", placeholder="e.g. a place where you borrow books")
+    query = st.text_input("", placeholder="e.g. a place where you borrow books")
 
     if query:
         q = query.strip()
@@ -314,7 +376,9 @@ def render_search_page() -> None:
                 for sense, distance in merged_results:
                     render_sense(sense, distance=distance)
             else:
-                st.info("No strong matches found.")
+                with st.container(border=True):
+                    st.markdown("**No strong matches found.**")
+                    st.caption("Try a shorter phrase, a synonym, or add this as a new word.")
                 if is_single_word:
                     detected_language = _detect_single_word_language(q)
                     language_choice = st.radio(
@@ -335,6 +399,7 @@ def render_search_page() -> None:
 
     else:
         st.info("Enter a query to search.")
+    _render_footer()
 
 
 PAGE_SEARCH = st.Page(render_search_page, title="Search", icon="🔎", default=True)
