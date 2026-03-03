@@ -1,26 +1,24 @@
 from __future__ import annotations
 
+import re
+
 import streamlit as st
 from dotenv import load_dotenv
 
+from src.autofill import autofill_missing_fields
 from src.cohere_client import embed_query_cached
 from src.db import get_session_factory, init_db
-from src.ingest import ingest_rows, parse_csv
-from src.search import exact_prefix_search, fuzzy_search, is_extension_enabled, semantic_search
+from src.ingest import IngestRow, ingest_rows, parse_csv
+from src.search import exact_prefix_search, exact_prefix_search_en, semantic_search_dual_english_first
+
+SEMANTIC_MAX_DISTANCE = 1.20
+POS_OPTIONS = ["", "noun", "verb", "adjective", "preposition", "adverb"]
 
 load_dotenv()
 
 st.set_page_config(page_title="MyLingua", page_icon="📚", layout="wide")
 
 st.title("What's the word? 💬")
-
-with st.sidebar:
-    st.header("Navigation")
-    page = st.radio("Go to", ["Search", "Ingest"], index=0)
-
-    st.divider()
-    st.caption("Settings")
-    display_lang = st.selectbox("Display hint", ["Auto", "EN", "DE"], index=0)
 
 
 @st.cache_resource
@@ -34,41 +32,114 @@ def _init_db():
 
 
 try:
-    created_exts = _init_db()
+    _init_db()
 except Exception as exc:
     st.error(f"Database init failed: {exc}")
     st.stop()
 
-if created_exts:
-    st.sidebar.success(f"Extensions ready: {', '.join(created_exts)}")
-
-
 def render_sense(sense, distance: float | None = None) -> None:
-    st.markdown(f"**{sense.term_de}** — {sense.translation_en or ''}")
-    if display_lang == "DE":
-        if sense.definition_de:
-            st.caption(sense.definition_de)
-        if sense.definition_en:
-            st.caption(sense.definition_en)
-    elif display_lang == "EN":
-        if sense.definition_en:
-            st.caption(sense.definition_en)
-        if sense.definition_de:
-            st.caption(sense.definition_de)
-    else:
-        if sense.definition_de:
-            st.caption(sense.definition_de)
-        if sense.definition_en:
-            st.caption(sense.definition_en)
+    def _strip_reference_numbers(value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = re.sub(r"\[\d+\]", "", value)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or None
 
-    if distance is not None:
-        st.caption(f"distance: {distance:.4f}")
+    title = sense.term_de
+    if sense.artikel_nominativ:
+        title = f"{sense.artikel_nominativ} {sense.term_de}"
+    st.markdown(f"**{title}** — {sense.translation_en or ''}")
+    definition_de = _strip_reference_numbers(sense.definition_de)
+    definition_en = _strip_reference_numbers(sense.definition_en)
+    sample_de = _strip_reference_numbers(sense.sample_sentences_de)
+    if sense.pos:
+        st.badge(sense.pos)
+    if definition_de:
+        st.caption(definition_de)
+    elif definition_en:
+        st.caption(definition_en)
+    if sample_de:
+        st.markdown(f"{sample_de}")
+
+
+    # if distance is not None:
+    #     st.caption(f"distance: {distance:.4f}")
     st.divider()
 
 
-if page == "Ingest":
+def _detect_single_word_language(word: str) -> str:
+    if re.search(r"[äöüßÄÖÜ]", word):
+        return "German"
+    return "English"
+
+
+def _save_word_entry(
+    term_de: str,
+    artikel_nominativ: str,
+    definition_de: str,
+    translation_en: str,
+    sample_sentences_de: str,
+    pos: str,
+    success_prefix: str = "Saved",
+) -> None:
+    cleaned_term = term_de.strip()
+    if not cleaned_term:
+        st.error("German word is required.")
+        return
+
+    user_definition = definition_de.strip() or None
+    user_translation = translation_en.strip() or None
+    user_sample = sample_sentences_de.strip() or None
+    user_pos = pos or None
+    user_artikel = artikel_nominativ.strip() or None
+
+    with st.spinner("Auto-filling missing fields..."):
+        (
+            auto_definition,
+            auto_definition_en,
+            auto_translation,
+            auto_sample,
+            auto_pos,
+            auto_artikel,
+        ) = autofill_missing_fields(
+            term_de=cleaned_term,
+            definition_de=user_definition,
+            definition_en=None,
+            translation_en=user_translation,
+            sample_sentences_de=user_sample,
+            pos=user_pos,
+            artikel_nominativ=user_artikel,
+        )
+
+    row = IngestRow(
+        term_de=cleaned_term,
+        artikel_nominativ=auto_artikel,
+        definition_de=auto_definition,
+        sample_sentences_de=auto_sample,
+        translation_en=auto_translation,
+        definition_en=auto_definition_en,
+        pos=auto_pos,
+        source="manual_form",
+    )
+    session_factory = _session_factory()
+    with session_factory() as session:
+        with st.spinner("Embedding and storing..."):
+            try:
+                created, updated = ingest_rows(session, [row], batch_size=1)
+                if created:
+                    st.success(f"{success_prefix}. The entry is now searchable.")
+                elif updated:
+                    st.success("Updated existing entry for this term.")
+            except Exception as exc:
+                st.error(f"Save failed: {exc}")
+
+
+def render_ingest_page() -> None:
     st.subheader("Ingest CSV")
-    st.write("Upload a CSV with headers: term_de, definition_de, translation_en, definition_en, pos, source")
+    st.write(
+        "Upload a CSV with headers: term_de, artikel_nominativ, definition_de, "
+        "sample_sentences_de, translation_en, definition_en, pos, source"
+    )
 
     uploaded = st.file_uploader("CSV file", type=["csv"])
     if uploaded is not None:
@@ -78,75 +149,197 @@ if page == "Ingest":
             st.dataframe(
                 {
                     "term_de": [r.term_de for r in rows[:10]],
+                    "artikel_nominativ": [r.artikel_nominativ for r in rows[:10]],
                     "definition_de": [r.definition_de for r in rows[:10]],
+                    "sample_sentences_de": [r.sample_sentences_de for r in rows[:10]],
                     "translation_en": [r.translation_en for r in rows[:10]],
                     "definition_en": [r.definition_en for r in rows[:10]],
                 }
             )
 
         if st.button("Ingest now", type="primary", disabled=not rows):
+            enriched_rows: list[IngestRow] = []
+            autofilled_rows = 0
+            with st.spinner("Auto-filling missing CSV values..."):
+                for row in rows:
+                    needs_autofill = any(
+                        [
+                            not row.definition_de,
+                            not row.definition_en,
+                            not row.translation_en,
+                            not row.sample_sentences_de,
+                            not row.pos,
+                            not row.artikel_nominativ,
+                        ]
+                    )
+                    if not needs_autofill:
+                        enriched_rows.append(row)
+                        continue
+
+                    (
+                        auto_definition_de,
+                        auto_definition_en,
+                        auto_translation_en,
+                        auto_sample_de,
+                        auto_pos,
+                        auto_artikel,
+                    ) = autofill_missing_fields(
+                        term_de=row.term_de,
+                        definition_de=row.definition_de,
+                        definition_en=row.definition_en,
+                        translation_en=row.translation_en,
+                        sample_sentences_de=row.sample_sentences_de,
+                        pos=row.pos,
+                        artikel_nominativ=row.artikel_nominativ,
+                    )
+
+                    updated_row = IngestRow(
+                        term_de=row.term_de,
+                        artikel_nominativ=auto_artikel,
+                        definition_de=auto_definition_de,
+                        sample_sentences_de=auto_sample_de,
+                        translation_en=auto_translation_en,
+                        definition_en=auto_definition_en,
+                        pos=auto_pos,
+                        source=row.source,
+                    )
+                    enriched_rows.append(updated_row)
+
+                    if (
+                        updated_row.definition_de != row.definition_de
+                        or updated_row.definition_en != row.definition_en
+                        or updated_row.translation_en != row.translation_en
+                        or updated_row.sample_sentences_de != row.sample_sentences_de
+                        or updated_row.pos != row.pos
+                        or updated_row.artikel_nominativ != row.artikel_nominativ
+                    ):
+                        autofilled_rows += 1
+
             session_factory = _session_factory()
             with session_factory() as session:
                 with st.spinner("Embedding and storing..."):
                     try:
-                        created, skipped = ingest_rows(session, rows)
-                        st.success(f"Done. Added {created}, skipped {skipped} duplicates.")
+                        created, updated = ingest_rows(session, enriched_rows)
+                        st.success(f"Done. Added {created}, updated {updated} existing terms.")
+                        if autofilled_rows:
+                            st.caption(f"Auto-filled missing values for {autofilled_rows} CSV rows.")
                     except Exception as exc:
                         st.error(f"Ingest failed: {exc}")
 
 
-if page == "Search":
+def render_add_word_page() -> None:
+    st.subheader("Add a word manually")
+    st.write("`term_de` is required. All other fields are optional.")
+
+    if "add_word_term_de_prefill" in st.session_state:
+        st.session_state["add_word_term_de"] = st.session_state.pop("add_word_term_de_prefill")
+    if "add_word_translation_en_prefill" in st.session_state:
+        st.session_state["add_word_translation_en"] = st.session_state.pop(
+            "add_word_translation_en_prefill"
+        )
+
+    with st.form("add_word_form", clear_on_submit=True):
+        term_de = st.text_input("German word (required)", key="add_word_term_de")
+        artikel_nominativ = st.text_input("Artikel (der/die/das, optional)")
+        definition_de = st.text_area("Meaning in German (optional)")
+        translation_en = st.text_input(
+            "Translation in English (optional)",
+            key="add_word_translation_en",
+        )
+        sample_sentences_de = st.text_area("Sample sentences in German (optional)")
+        pos = st.selectbox(
+            "Part of speech (optional)",
+            POS_OPTIONS,
+            index=0,
+        )
+        submitted = st.form_submit_button("Save word", type="primary")
+
+    if submitted:
+        _save_word_entry(
+            term_de=term_de,
+            artikel_nominativ=artikel_nominativ,
+            definition_de=definition_de,
+            translation_en=translation_en,
+            sample_sentences_de=sample_sentences_de,
+            pos=pos,
+        )
+
+
+def render_search_page() -> None:
     st.subheader("Search by meaning")
-    st.caption(f"Display hint: {display_lang}")
 
     query = st.text_input("Search", placeholder="e.g. a place where you borrow books")
-    force_word_search = st.checkbox("Force word search (exact/prefix)", value=False)
 
     if query:
+        q = query.strip()
+        is_single_word = " " not in q
         session_factory = _session_factory()
         with session_factory() as session:
-            col1, col2 = st.columns([1, 1])
+            seen = set()
+            merged_results: list[tuple[object, float | None]] = []
 
-            with col1:
-                st.markdown("### Exact / Prefix matches")
-                results = []
-                if force_word_search or (" " not in query.strip()):
-                    results = exact_prefix_search(session, query, limit=20)
-                    if is_extension_enabled(session, "pg_trgm"):
-                        fuzzy = fuzzy_search(session, query, limit=10)
-                    else:
-                        fuzzy = []
-                else:
-                    fuzzy = []
+            lexical_results = []
+            if is_single_word:
+                # For one-word queries, prioritize English lexical lookup before German.
+                lexical_results.extend(exact_prefix_search_en(session, q, limit=5))
+                lexical_results.extend(exact_prefix_search(session, q, limit=5))
 
-                if results or fuzzy:
-                    for sense in results:
-                        render_sense(sense)
+                for sense in lexical_results:
+                    if sense.id in seen:
+                        continue
+                    seen.add(sense.id)
+                    merged_results.append((sense, None))
 
-                    if fuzzy:
-                        st.markdown("#### Fuzzy matches")
-                        for sense in fuzzy:
-                            render_sense(sense)
-                    elif force_word_search and not is_extension_enabled(session, "pg_trgm"):
-                        st.info("pg_trgm extension not available; fuzzy search is disabled.")
-                else:
-                    st.info("No exact or prefix matches.")
-
-            with col2:
-                st.markdown("### Semantic matches")
-                with st.spinner("Embedding query..."):
+            if not merged_results:
+                with st.spinner("Finding best matches..."):
                     try:
-                        embedding = embed_query_cached(query)
-                        semantic_results = semantic_search(session, embedding, limit=1)
+                        embedding = embed_query_cached(q)
+                        semantic_results = semantic_search_dual_english_first(
+                            session,
+                            embedding,
+                            limit=10,
+                            max_distance=SEMANTIC_MAX_DISTANCE,
+                        )
                     except Exception as exc:
                         st.error(f"Semantic search failed: {exc}")
                         semantic_results = []
 
-                if semantic_results:
-                    for sense, distance in semantic_results:
-                        render_sense(sense, distance=distance)
-                else:
-                    st.info("No semantic matches yet. Try ingesting data.")
+                for sense, distance in semantic_results:
+                    if sense.id in seen:
+                        continue
+                    seen.add(sense.id)
+                    merged_results.append((sense, distance))
+
+            if merged_results:
+                for sense, distance in merged_results:
+                    render_sense(sense, distance=distance)
+            else:
+                st.info("No strong matches found.")
+                if is_single_word:
+                    detected_language = _detect_single_word_language(q)
+                    language_choice = st.radio(
+                        "Query language",
+                        ["English", "German"],
+                        index=0 if detected_language == "English" else 1,
+                        horizontal=True,
+                        key=f"search_add_lang_{q}",
+                    )
+                    if st.button(f"Add word *{q}*?", type="primary"):
+                        st.session_state["add_word_term_de_prefill"] = (
+                            q if language_choice == "German" else ""
+                        )
+                        st.session_state["add_word_translation_en_prefill"] = (
+                            q if language_choice == "English" else ""
+                        )
+                        st.switch_page(PAGE_ADD_WORD)
 
     else:
         st.info("Enter a query to search.")
+
+
+PAGE_SEARCH = st.Page(render_search_page, title="Search", icon="🔎", default=True)
+PAGE_INGEST = st.Page(render_ingest_page, title="Ingest", icon="📥")
+PAGE_ADD_WORD = st.Page(render_add_word_page, title="Add Word", icon="➕")
+
+navigation = st.navigation([PAGE_SEARCH, PAGE_INGEST, PAGE_ADD_WORD])
+navigation.run()

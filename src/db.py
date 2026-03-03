@@ -49,10 +49,39 @@ def init_db() -> list[str]:
     Base.metadata.create_all(bind=engine)
 
     with engine.begin() as connection:
+        _safe_exec(
+            connection,
+            "ALTER TABLE senses ADD COLUMN IF NOT EXISTS sample_sentences_de TEXT",
+        )
+        _safe_exec(
+            connection,
+            "ALTER TABLE senses ADD COLUMN IF NOT EXISTS artikel_nominativ TEXT",
+        )
+        _safe_exec(
+            connection,
+            "ALTER TABLE senses ADD COLUMN IF NOT EXISTS embedding_en vector(384)",
+        )
+        _safe_exec(
+            connection,
+            "ALTER TABLE senses ADD COLUMN IF NOT EXISTS embedding_de vector(384)",
+        )
+        _safe_exec(
+            connection,
+            "DROP INDEX IF EXISTS idx_senses_embedding_hnsw",
+        )
+        _safe_exec(
+            connection,
+            "ALTER TABLE senses DROP COLUMN IF EXISTS embedding",
+        )
+
         if "vector" in created:
             _safe_exec(
                 connection,
-                "ALTER TABLE senses ALTER COLUMN embedding TYPE vector(384)",
+                "ALTER TABLE senses ALTER COLUMN embedding_en TYPE vector(384)",
+            )
+            _safe_exec(
+                connection,
+                "ALTER TABLE senses ALTER COLUMN embedding_de TYPE vector(384)",
             )
 
         _safe_exec(
@@ -69,7 +98,11 @@ def init_db() -> list[str]:
         if "vector" in created:
             _safe_exec(
                 connection,
-                "CREATE INDEX IF NOT EXISTS idx_senses_embedding_hnsw ON senses USING hnsw (embedding vector_l2_ops)",
+                "CREATE INDEX IF NOT EXISTS idx_senses_embedding_en_hnsw ON senses USING hnsw (embedding_en vector_l2_ops)",
+            )
+            _safe_exec(
+                connection,
+                "CREATE INDEX IF NOT EXISTS idx_senses_embedding_de_hnsw ON senses USING hnsw (embedding_de vector_l2_ops)",
             )
 
     return created

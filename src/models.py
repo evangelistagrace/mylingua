@@ -17,13 +17,16 @@ class Sense(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     term_de = Column(Text, nullable=False)
+    artikel_nominativ = Column(Text)
     definition_de = Column(Text)
+    sample_sentences_de = Column(Text)
     translation_en = Column(Text)
     definition_en = Column(Text)
     pos = Column(Text)
     source = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    embedding = Column(Vector(EMBEDDING_DIM))
+    embedding_en = Column(Vector(EMBEDDING_DIM))
+    embedding_de = Column(Vector(EMBEDDING_DIM))
 
     __table_args__ = (
         UniqueConstraint(
