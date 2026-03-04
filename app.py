@@ -436,11 +436,18 @@ def render_words_page() -> None:
     else:
         st.info("Enter a query to search.")
 
+    render_all_words_fragment()
+    _render_footer()
+
+
+@st.fragment
+def render_all_words_fragment() -> None:
     st.markdown("---")
     st.subheader("All words")
     list_filter = st.text_input(
         "Filter word list",
         placeholder="Filter by German term, translation, or synonym",
+        key="words_list_filter",
     )
     session_factory = _session_factory()
     with session_factory() as session:
@@ -459,7 +466,6 @@ def render_words_page() -> None:
     st.caption(f"{len(rows)} word(s)")
     if not rows:
         st.info("No words found.")
-        _render_footer()
         return
 
     table_data = {
@@ -489,7 +495,6 @@ def render_words_page() -> None:
         render_sense(selected)
     else:
         st.caption("Click a row to view full details.")
-    _render_footer()
 
 
 
