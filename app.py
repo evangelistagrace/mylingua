@@ -11,7 +11,7 @@ from src.db import get_session_factory, init_db
 from src.ingest import IngestRow, ingest_rows, parse_csv
 from src.search import exact_prefix_search, exact_prefix_search_en, semantic_search_dual_english_first
 
-SEMANTIC_MAX_DISTANCE = 1.20
+SEMANTIC_MAX_DISTANCE = 1.2
 POS_OPTIONS = ["", "noun", "verb", "adjective", "preposition", "adverb"]
 
 load_dotenv()
@@ -97,13 +97,13 @@ def render_sense(sense, distance: float | None = None) -> None:
         if sample_de:
             st.markdown(f"*{sample_de}*")
 
-        # if distance is not None:
-        #     if distance <= 0.9:
-        #         st.caption("High match")
-        #     elif distance <= 1.1:
-        #         st.caption("Medium match")
-        #     else:
-        #         st.caption("Weak match")
+        if distance is not None:
+            if distance <= 0.9:
+                st.caption("High match")
+            elif distance <= 1.1:
+                st.caption("Medium match")
+            else:
+                st.caption("Weak match")
 
 
 def _render_footer() -> None:
@@ -373,6 +373,7 @@ def render_search_page() -> None:
                     merged_results.append((sense, distance))
 
             if merged_results:
+                st.markdown("Best match(es):")
                 for sense, distance in merged_results:
                     render_sense(sense, distance=distance)
             else:
