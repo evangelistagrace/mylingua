@@ -9,6 +9,7 @@ from src.autofill import autofill_missing_fields
 from src.cohere_client import embed_query_cached
 from src.db import get_session_factory, init_db
 from src.ingest import IngestRow, ingest_rows, parse_tabular_file
+from src.models import Sense
 from src.search import (
     exact_prefix_search_en,
     exact_prefix_search_synonyms_en,
@@ -23,7 +24,7 @@ load_dotenv()
 
 st.set_page_config(page_title="MyLingua", page_icon="📚", layout="wide")
 
-st.title("What's the word? 💬")
+st.title("What's that (German) word? 💬")
 
 
 @st.cache_resource
@@ -358,13 +359,16 @@ def render_add_word_page() -> None:
     _render_footer()
 
 
-def render_search_page() -> None:
-    st.subheader("Search by meaning or word")
+def render_words_page() -> None:
+    st.subheader("Search")
 
-    query = st.text_input("", placeholder="e.g. a place where you borrow books")
+    search_query = st.text_input(
+        "Search by meaning or word",
+        placeholder="e.g. a place where you borrow books",
+    )
 
-    if query:
-        q = query.strip()
+    if search_query:
+        q = search_query.strip()
         is_single_word = " " not in q
         session_factory = _session_factory()
         with session_factory() as session:
@@ -429,15 +433,69 @@ def render_search_page() -> None:
                             q if language_choice == "English" else ""
                         )
                         st.switch_page(PAGE_ADD_WORD)
-
     else:
         st.info("Enter a query to search.")
+
+    st.markdown("---")
+    st.subheader("All words")
+    list_filter = st.text_input(
+        "Filter word list",
+        placeholder="Filter by German term, translation, or synonym",
+    )
+    session_factory = _session_factory()
+    with session_factory() as session:
+        rows = session.query(Sense).order_by(Sense.term_de.asc()).all()
+
+    if list_filter:
+        q = list_filter.strip().lower()
+        rows = [
+            r
+            for r in rows
+            if q in (r.term_de or "").lower()
+            or q in (r.translation_en or "").lower()
+            or q in (r.synonyms_en or "").lower()
+        ]
+
+    st.caption(f"{len(rows)} word(s)")
+    if not rows:
+        st.info("No words found.")
+        _render_footer()
+        return
+
+    table_data = {
+        "term_de": [r.term_de for r in rows],
+        "artikel_nominativ": [r.artikel_nominativ for r in rows],
+        "translation_en": [r.translation_en for r in rows],
+        "synonyms_en": [r.synonyms_en for r in rows],
+        "pos": [r.pos for r in rows],
+    }
+    event = st.dataframe(
+        table_data,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="words_table",
+    )
+
+    selected = None
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        row_idx = selected_rows[0]
+        if 0 <= row_idx < len(rows):
+            selected = rows[row_idx]
+
+    if selected:
+        render_sense(selected)
+    else:
+        st.caption("Click a row to view full details.")
     _render_footer()
 
 
-PAGE_SEARCH = st.Page(render_search_page, title="Search", icon="🔎", default=True)
+
+PAGE_WORDS = st.Page(render_words_page, title="Search", icon="🔎", default=True)
 PAGE_INGEST = st.Page(render_ingest_page, title="Ingest", icon="📥")
 PAGE_ADD_WORD = st.Page(render_add_word_page, title="Add Word", icon="➕")
 
-navigation = st.navigation([PAGE_SEARCH, PAGE_INGEST, PAGE_ADD_WORD])
+navigation = st.navigation([PAGE_WORDS, PAGE_INGEST, PAGE_ADD_WORD])
 navigation.run()
