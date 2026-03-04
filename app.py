@@ -433,8 +433,8 @@ def render_words_page() -> None:
                             q if language_choice == "English" else ""
                         )
                         st.switch_page(PAGE_ADD_WORD)
-    else:
-        st.info("Enter a query to search.")
+    # else:
+    #     st.info("Enter a query to search.")
 
     _render_footer()
 
