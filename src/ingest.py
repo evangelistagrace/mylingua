@@ -40,6 +40,7 @@ class IngestRow:
     definition_de: str | None
     sample_sentences_de: str | None
     translation_en: str | None
+    synonyms_en: str | None
     definition_en: str | None
     pos: str | None
     source: str | None
@@ -47,6 +48,7 @@ class IngestRow:
     def meaning_blob_en(self) -> str:
         return (
             f"EN translation: {self.translation_en or ''}. "
+            f"EN synonyms: {self.synonyms_en or ''}. "
             f"EN definition: {self.definition_en or ''}."
         )
 
@@ -144,6 +146,7 @@ def _row_from_raw(raw: dict[str, str]) -> IngestRow:
         definition_de=val("definition_de") or None,
         sample_sentences_de=val("sample_sentences_de") or None,
         translation_en=val("translation_en") or None,
+        synonyms_en=val("synonyms_en") or None,
         definition_en=val("definition_en") or None,
         pos=val("pos") or None,
         source=val("source") or None,
@@ -242,6 +245,7 @@ def _flush_batch(
                 existing.definition_de = definition_de
                 existing.sample_sentences_de = sample_sentences_de
                 existing.translation_en = row.translation_en
+                existing.synonyms_en = row.synonyms_en
                 existing.definition_en = row.definition_en
                 existing.pos = row.pos
                 existing.source = row.source
@@ -255,6 +259,7 @@ def _flush_batch(
                     definition_de=definition_de,
                     sample_sentences_de=sample_sentences_de,
                     translation_en=row.translation_en,
+                    synonyms_en=row.synonyms_en,
                     definition_en=row.definition_en,
                     pos=row.pos,
                     source=row.source,

@@ -47,6 +47,34 @@ def exact_prefix_search(session: Session, query: str, limit: int = 20) -> List[S
     return merged[:limit]
 
 
+def _german_spelling_variants(query: str) -> list[str]:
+    q = query.strip()
+    if not q:
+        return []
+
+    variants = {q, q.capitalize()}
+    pairs = [
+        ("ae", "ä"),
+        ("oe", "ö"),
+        ("ue", "ü"),
+        ("ss", "ß"),
+        ("ä", "ae"),
+        ("ö", "oe"),
+        ("ü", "ue"),
+        ("ß", "ss"),
+    ]
+
+    for src, dst in pairs:
+        if src in q.lower():
+            # Preserve original rough casing by transforming lowercase and uppercase variants.
+            lower_variant = q.lower().replace(src, dst)
+            variants.add(lower_variant)
+            variants.add(lower_variant.capitalize())
+            variants.add(q.replace(src, dst))
+
+    return [v for v in variants if v]
+
+
 def exact_prefix_search_en(session: Session, query: str, limit: int = 20) -> List[Sense]:
     q = query.strip()
     if not q:
@@ -81,6 +109,51 @@ def exact_prefix_search_en(session: Session, query: str, limit: int = 20) -> Lis
     return merged[:limit]
 
 
+def exact_prefix_search_synonyms_en(session: Session, query: str, limit: int = 20) -> List[Sense]:
+    q = query.strip()
+    if not q:
+        return []
+
+    token_pattern = rf"(^|[,\s;/]){q.lower()}([,\s;/]|$)"
+
+    exact_token = (
+        session.query(Sense)
+        .filter(Sense.synonyms_en.isnot(None))
+        .filter(func.lower(Sense.synonyms_en).op("~")(token_pattern))
+        .order_by(Sense.term_de.asc())
+        .limit(limit)
+        .all()
+    )
+
+    prefix_text = (
+        session.query(Sense)
+        .filter(Sense.synonyms_en.isnot(None))
+        .filter(Sense.synonyms_en.ilike(f"{q}%"))
+        .order_by(Sense.term_de.asc())
+        .limit(limit)
+        .all()
+    )
+
+    contains_text = (
+        session.query(Sense)
+        .filter(Sense.synonyms_en.isnot(None))
+        .filter(Sense.synonyms_en.ilike(f"%{q}%"))
+        .order_by(Sense.term_de.asc())
+        .limit(limit)
+        .all()
+    )
+
+    seen = set()
+    merged: list[Sense] = []
+    for item in exact_token + prefix_text + contains_text:
+        if item.id in seen:
+            continue
+        seen.add(item.id)
+        merged.append(item)
+
+    return merged[:limit]
+
+
 def fuzzy_search(session: Session, query: str, limit: int = 10) -> List[Sense]:
     if not is_extension_enabled(session, "pg_trgm"):
         return []
@@ -92,6 +165,34 @@ def fuzzy_search(session: Session, query: str, limit: int = 10) -> List[Sense]:
         .limit(limit)
         .all()
     )
+
+
+def tolerant_german_word_search(session: Session, query: str, limit: int = 20) -> List[Sense]:
+    variants = _german_spelling_variants(query)
+    seen = set()
+    merged: list[Sense] = []
+
+    for variant in variants:
+        for item in exact_prefix_search(session, variant, limit=limit):
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            merged.append(item)
+            if len(merged) >= limit:
+                return merged[:limit]
+
+    # Fuzzy fallback (typos, close misspellings) when pg_trgm is available.
+    if is_extension_enabled(session, "pg_trgm"):
+        for variant in variants:
+            for item in fuzzy_search(session, variant, limit=limit):
+                if item.id in seen:
+                    continue
+                seen.add(item.id)
+                merged.append(item)
+                if len(merged) >= limit:
+                    return merged[:limit]
+
+    return merged[:limit]
 
 
 def semantic_search_dual_english_first(

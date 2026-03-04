@@ -59,6 +59,10 @@ def init_db() -> list[str]:
         )
         _safe_exec(
             connection,
+            "ALTER TABLE senses ADD COLUMN IF NOT EXISTS synonyms_en TEXT",
+        )
+        _safe_exec(
+            connection,
             "ALTER TABLE senses ADD COLUMN IF NOT EXISTS embedding_en vector(384)",
         )
         _safe_exec(

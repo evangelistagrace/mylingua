@@ -8,11 +8,12 @@ A language-learning vocabulary app for English speakers learning German. It uses
 
 - Search flow optimized for learners:
   - Single-word queries: lexical first (`translation_en`, then `term_de`)
+  - German single-word lexical search is typo-tolerant (case, umlaut substitutions, fuzzy misspellings)
   - Phrase queries / fallback: semantic search
   - Single-word no-match path: quick action to jump to Add Word with prefilled context
 - Manual Add Word form:
   - Required: `term_de`
-  - Optional: `artikel_nominativ` (`der|die|das`), `definition_de`, `translation_en`, `sample_sentences_de`, `pos`
+  - Optional: `artikel_nominativ` (`der|die|das`), `definition_de`, `translation_en`, `synonyms_en`, `sample_sentences_de`, `pos`
   - Missing fields auto-filled from external sources
 - CSV/XLSX ingest with the same missing-field autofill behavior
 - Upsert by `term_de`:
@@ -52,7 +53,9 @@ A language-learning vocabulary app for English speakers learning German. It uses
 - DATABASE_URL should use the SQLAlchemy psycopg driver format, for example: postgresql+psycopg://postgres:postgres@localhost:5432/mylingua
 - Auto-fill priority (Add Word and CSV ingest):
   - User-entered values always win
-  - Missing `definition_de`, `definition_en`, `translation_en`, `pos`, `artikel_nominativ` are filled from Wiktionary first
+  - Missing `definition_de`, `definition_en`, `translation_en`, `synonyms_en`, `pos`, `artikel_nominativ` are filled from Wiktionary first
+  - `term_de` is normalized to the first German Wiktionary API search match title when available (typo/case/umlaut corrections)
+  - `synonyms_en` is resolved from the English Wiktionary page of the selected `translation_en`
   - Missing English definition/translation can fall back to Wikidata
   - Missing sample sentence is pulled from Tatoeba first; if unavailable, Wiktionary example is used
 - Sample sentence autofill requires at least 5 words.
@@ -64,4 +67,4 @@ A language-learning vocabulary app for English speakers learning German. It uses
 Use data/sample_vocab.csv in the Ingest page to quickly test the app.
 CSV/XLSX headers supported by ingest:
 - `term_de` (required)
-- `artikel_nominativ`, `definition_de`, `translation_en`, `definition_en`, `sample_sentences_de`, `pos`, `source` (optional)
+- `artikel_nominativ`, `definition_de`, `translation_en`, `synonyms_en`, `definition_en`, `sample_sentences_de`, `pos`, `source` (optional)

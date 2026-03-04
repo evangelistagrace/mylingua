@@ -21,6 +21,7 @@ class Sense(Base):
     definition_de = Column(Text)
     sample_sentences_de = Column(Text)
     translation_en = Column(Text)
+    synonyms_en = Column(Text)
     definition_en = Column(Text)
     pos = Column(Text)
     source = Column(Text)

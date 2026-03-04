@@ -9,9 +9,14 @@ from src.autofill import autofill_missing_fields
 from src.cohere_client import embed_query_cached
 from src.db import get_session_factory, init_db
 from src.ingest import IngestRow, ingest_rows, parse_tabular_file
-from src.search import exact_prefix_search, exact_prefix_search_en, semantic_search_dual_english_first
+from src.search import (
+    exact_prefix_search_en,
+    exact_prefix_search_synonyms_en,
+    semantic_search_dual_english_first,
+    tolerant_german_word_search,
+)
 
-SEMANTIC_MAX_DISTANCE = 1.2
+SEMANTIC_MAX_DISTANCE = 1.1
 POS_OPTIONS = ["", "noun", "verb", "adjective", "preposition", "adverb"]
 
 load_dotenv()
@@ -84,8 +89,13 @@ def render_sense(sense, distance: float | None = None) -> None:
         # left, right = st.columns([0.82, 0.18])
         # with left:
         st.markdown(f"**{title}**")
+        en_parts = []
         if sense.translation_en:
-            st.caption(sense.translation_en)
+            en_parts.append(sense.translation_en)
+        if getattr(sense, "synonyms_en", None):
+            en_parts.append(sense.synonyms_en)
+        if en_parts:
+            st.caption(", ".join(en_parts))
         # with right:
         if badge_parts:
             st.markdown("".join(badge_parts), unsafe_allow_html=True)
@@ -98,9 +108,9 @@ def render_sense(sense, distance: float | None = None) -> None:
             st.markdown(f"*{sample_de}*")
 
         if distance is not None:
-            if distance <= 0.9:
+            if distance <= 1:
                 st.caption("High match")
-            elif distance <= 1.1:
+            elif distance <= 1.2:
                 st.caption("Medium match")
             else:
                 st.caption("Weak match")
@@ -124,6 +134,7 @@ def _save_word_entry(
     artikel_nominativ: str,
     definition_de: str,
     translation_en: str,
+    synonyms_en: str,
     sample_sentences_de: str,
     pos: str,
     success_prefix: str = "Saved",
@@ -135,15 +146,18 @@ def _save_word_entry(
 
     user_definition = definition_de.strip() or None
     user_translation = translation_en.strip() or None
+    user_synonyms = synonyms_en.strip() or None
     user_sample = sample_sentences_de.strip() or None
     user_pos = pos or None
     user_artikel = artikel_nominativ.strip() or None
 
     with st.spinner("Auto-filling missing fields..."):
         (
+            auto_term_de,
             auto_definition,
             auto_definition_en,
             auto_translation,
+            auto_synonyms,
             auto_sample,
             auto_pos,
             auto_artikel,
@@ -152,17 +166,19 @@ def _save_word_entry(
             definition_de=user_definition,
             definition_en=None,
             translation_en=user_translation,
+            synonyms_en=user_synonyms,
             sample_sentences_de=user_sample,
             pos=user_pos,
             artikel_nominativ=user_artikel,
         )
 
     row = IngestRow(
-        term_de=cleaned_term,
+        term_de=auto_term_de,
         artikel_nominativ=auto_artikel,
         definition_de=auto_definition,
         sample_sentences_de=auto_sample,
         translation_en=auto_translation,
+        synonyms_en=auto_synonyms,
         definition_en=auto_definition_en,
         pos=auto_pos,
         source="manual_form",
@@ -179,15 +195,21 @@ def _save_word_entry(
                     sources_used.append("Wiktionary")
                 if (not user_translation and auto_translation) or auto_definition_en:
                     sources_used.append("Wiktionary/Wikidata")
+                if not user_synonyms and auto_synonyms:
+                    sources_used.append("Wiktionary")
                 if not user_sample and auto_sample:
                     sources_used.append("Tatoeba/Wiktionary")
 
                 if created:
                     st.success(f"{success_prefix}. The entry is now searchable.")
+                    if auto_term_de != cleaned_term:
+                        st.caption(f"Saved as canonical German term: {auto_term_de}")
                     if sources_used:
                         st.caption(f"Auto-filled from: {', '.join(sources_used)}")
                 elif updated:
                     st.success("Updated existing entry for this term.")
+                    if auto_term_de != cleaned_term:
+                        st.caption(f"Saved as canonical German term: {auto_term_de}")
                     if sources_used:
                         st.caption(f"Auto-filled from: {', '.join(sources_used)}")
             except Exception as exc:
@@ -198,7 +220,7 @@ def render_ingest_page() -> None:
     st.subheader("Ingest File")
     st.write(
         "Upload a CSV or XLSX with headers: term_de, artikel_nominativ, definition_de, "
-        "sample_sentences_de, translation_en, definition_en, pos, source"
+        "sample_sentences_de, translation_en, synonyms_en, definition_en, pos, source"
     )
 
     uploaded = st.file_uploader("File", type=["csv", "xlsx"])
@@ -213,6 +235,7 @@ def render_ingest_page() -> None:
                     "definition_de": [r.definition_de for r in rows[:10]],
                     "sample_sentences_de": [r.sample_sentences_de for r in rows[:10]],
                     "translation_en": [r.translation_en for r in rows[:10]],
+                    "synonyms_en": [r.synonyms_en for r in rows[:10]],
                     "definition_en": [r.definition_en for r in rows[:10]],
                 }
             )
@@ -230,6 +253,7 @@ def render_ingest_page() -> None:
                             not row.sample_sentences_de,
                             not row.pos,
                             not row.artikel_nominativ,
+                            not row.synonyms_en,
                         ]
                     )
                     if not needs_autofill:
@@ -237,9 +261,11 @@ def render_ingest_page() -> None:
                         continue
 
                     (
+                        auto_term_de,
                         auto_definition_de,
                         auto_definition_en,
                         auto_translation_en,
+                        auto_synonyms_en,
                         auto_sample_de,
                         auto_pos,
                         auto_artikel,
@@ -248,17 +274,19 @@ def render_ingest_page() -> None:
                         definition_de=row.definition_de,
                         definition_en=row.definition_en,
                         translation_en=row.translation_en,
+                        synonyms_en=row.synonyms_en,
                         sample_sentences_de=row.sample_sentences_de,
                         pos=row.pos,
                         artikel_nominativ=row.artikel_nominativ,
                     )
 
                     updated_row = IngestRow(
-                        term_de=row.term_de,
+                        term_de=auto_term_de,
                         artikel_nominativ=auto_artikel,
                         definition_de=auto_definition_de,
                         sample_sentences_de=auto_sample_de,
                         translation_en=auto_translation_en,
+                        synonyms_en=auto_synonyms_en,
                         definition_en=auto_definition_en,
                         pos=auto_pos,
                         source=row.source,
@@ -269,6 +297,7 @@ def render_ingest_page() -> None:
                         updated_row.definition_de != row.definition_de
                         or updated_row.definition_en != row.definition_en
                         or updated_row.translation_en != row.translation_en
+                        or updated_row.synonyms_en != row.synonyms_en
                         or updated_row.sample_sentences_de != row.sample_sentences_de
                         or updated_row.pos != row.pos
                         or updated_row.artikel_nominativ != row.artikel_nominativ
@@ -306,6 +335,7 @@ def render_add_word_page() -> None:
             "Translation in English (optional)",
             key="add_word_translation_en",
         )
+        synonyms_en = st.text_input("English synonyms (optional)")
         pos = st.selectbox(
             "Part of speech (optional)",
             POS_OPTIONS,
@@ -321,6 +351,7 @@ def render_add_word_page() -> None:
             artikel_nominativ=artikel_nominativ,
             definition_de=definition_de,
             translation_en=translation_en,
+            synonyms_en=synonyms_en,
             sample_sentences_de=sample_sentences_de,
             pos=pos,
         )
@@ -344,7 +375,8 @@ def render_search_page() -> None:
             if is_single_word:
                 # For one-word queries, prioritize English lexical lookup before German.
                 lexical_results.extend(exact_prefix_search_en(session, q, limit=5))
-                lexical_results.extend(exact_prefix_search(session, q, limit=5))
+                lexical_results.extend(exact_prefix_search_synonyms_en(session, q, limit=5))
+                lexical_results.extend(tolerant_german_word_search(session, q, limit=10))
 
                 for sense in lexical_results:
                     if sense.id in seen:
