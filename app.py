@@ -436,13 +436,11 @@ def render_words_page() -> None:
     else:
         st.info("Enter a query to search.")
 
-    render_all_words_fragment()
     _render_footer()
 
 
 @st.fragment
 def render_all_words_fragment() -> None:
-    st.markdown("---")
     st.subheader("All words")
     list_filter = st.text_input(
         "Filter word list",
@@ -497,10 +495,16 @@ def render_all_words_fragment() -> None:
         st.caption("Click a row to view full details.")
 
 
+def render_all_words_page() -> None:
+    render_all_words_fragment()
+    _render_footer()
+
+
 
 PAGE_WORDS = st.Page(render_words_page, title="Search", icon="🔎", default=True)
+PAGE_ALL_WORDS = st.Page(render_all_words_page, title="All Words", icon="📖")
 PAGE_INGEST = st.Page(render_ingest_page, title="Ingest", icon="📥")
 PAGE_ADD_WORD = st.Page(render_add_word_page, title="Add Word", icon="➕")
 
-navigation = st.navigation([PAGE_WORDS, PAGE_INGEST, PAGE_ADD_WORD])
+navigation = st.navigation([PAGE_WORDS, PAGE_ALL_WORDS, PAGE_INGEST, PAGE_ADD_WORD])
 navigation.run()
