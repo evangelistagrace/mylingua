@@ -14,7 +14,7 @@ A language-learning vocabulary app for English speakers learning German. It uses
   - Required: `term_de`
   - Optional: `artikel_nominativ` (`der|die|das`), `definition_de`, `translation_en`, `sample_sentences_de`, `pos`
   - Missing fields auto-filled from external sources
-- CSV ingest with the same missing-field autofill behavior
+- CSV/XLSX ingest with the same missing-field autofill behavior
 - Upsert by `term_de`:
   - existing entries are updated with newest values instead of skipped
 - Dual-vector semantic retrieval:
@@ -62,6 +62,6 @@ A language-learning vocabulary app for English speakers learning German. It uses
 ## Sample data
 
 Use data/sample_vocab.csv in the Ingest page to quickly test the app.
-CSV headers supported by ingest:
+CSV/XLSX headers supported by ingest:
 - `term_de` (required)
 - `artikel_nominativ`, `definition_de`, `translation_en`, `definition_en`, `sample_sentences_de`, `pos`, `source` (optional)

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from src.autofill import autofill_missing_fields
 from src.cohere_client import embed_query_cached
 from src.db import get_session_factory, init_db
-from src.ingest import IngestRow, ingest_rows, parse_csv
+from src.ingest import IngestRow, ingest_rows, parse_tabular_file
 from src.search import exact_prefix_search, exact_prefix_search_en, semantic_search_dual_english_first
 
 SEMANTIC_MAX_DISTANCE = 1.2
@@ -195,15 +195,15 @@ def _save_word_entry(
 
 
 def render_ingest_page() -> None:
-    st.subheader("Ingest CSV")
+    st.subheader("Ingest File")
     st.write(
-        "Upload a CSV with headers: term_de, artikel_nominativ, definition_de, "
+        "Upload a CSV or XLSX with headers: term_de, artikel_nominativ, definition_de, "
         "sample_sentences_de, translation_en, definition_en, pos, source"
     )
 
-    uploaded = st.file_uploader("CSV file", type=["csv"])
+    uploaded = st.file_uploader("File", type=["csv", "xlsx"])
     if uploaded is not None:
-        rows = parse_csv(uploaded.getvalue())
+        rows = parse_tabular_file(uploaded.name, uploaded.getvalue())
         st.write(f"Parsed {len(rows)} rows")
         if rows:
             st.dataframe(

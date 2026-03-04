@@ -4,9 +4,10 @@ import csv
 import hashlib
 import re
 from dataclasses import dataclass
-from io import StringIO
+from io import BytesIO, StringIO
 from typing import Iterable, List
 
+from openpyxl import load_workbook
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -60,23 +61,93 @@ class IngestRow:
 
 
 def parse_csv(file_bytes: bytes) -> List[IngestRow]:
-    text = file_bytes.decode("utf-8", errors="replace")
-    reader = csv.DictReader(StringIO(text))
+    text = _decode_csv_text(file_bytes)
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+
+    reader = csv.DictReader(StringIO(text), dialect=dialect)
+    return _rows_from_dict_reader(reader)
+
+
+def _decode_csv_text(file_bytes: bytes) -> str:
+    # Try common spreadsheet/export encodings before lossy replacement.
+    encodings = ["utf-8-sig", "utf-16", "cp1252", "latin-1"]
+    for encoding in encodings:
+        try:
+            return file_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return file_bytes.decode("utf-8", errors="replace")
+
+
+def parse_xlsx(file_bytes: bytes) -> List[IngestRow]:
+    workbook = load_workbook(filename=BytesIO(file_bytes), read_only=True, data_only=True)
+    sheet = workbook.active
+    values = sheet.values
+
+    try:
+        headers_raw = next(values)
+    except StopIteration:
+        return []
+
+    if not headers_raw:
+        return []
+
+    headers = [_canonical_header(h) for h in headers_raw]
     rows: List[IngestRow] = []
-    for raw in reader:
-        rows.append(
-            IngestRow(
-                term_de=(raw.get("term_de") or "").strip(),
-                artikel_nominativ=(raw.get("artikel_nominativ") or "").strip() or None,
-                definition_de=(raw.get("definition_de") or "").strip() or None,
-                sample_sentences_de=(raw.get("sample_sentences_de") or "").strip() or None,
-                translation_en=(raw.get("translation_en") or "").strip() or None,
-                definition_en=(raw.get("definition_en") or "").strip() or None,
-                pos=(raw.get("pos") or "").strip() or None,
-                source=(raw.get("source") or "").strip() or None,
-            )
-        )
+    for record in values:
+        raw = {
+            headers[idx]: _cell_to_str(record[idx]) if idx < len(record) else ""
+            for idx in range(len(headers))
+        }
+        rows.append(_row_from_raw(raw))
     return [r for r in rows if r.term_de]
+
+
+def parse_tabular_file(filename: str, file_bytes: bytes) -> List[IngestRow]:
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        return parse_xlsx(file_bytes)
+    return parse_csv(file_bytes)
+
+
+def _canonical_header(value: object) -> str:
+    text = str(value or "").strip().lower().replace("\ufeff", "")
+    text = re.sub(r"\s+", "_", text)
+    return text
+
+
+def _cell_to_str(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _rows_from_dict_reader(reader: csv.DictReader) -> List[IngestRow]:
+    rows: List[IngestRow] = []
+    for source_raw in reader:
+        raw = {_canonical_header(k): (v or "") for k, v in source_raw.items() if k is not None}
+        rows.append(_row_from_raw(raw))
+    return [r for r in rows if r.term_de]
+
+
+def _row_from_raw(raw: dict[str, str]) -> IngestRow:
+    def val(key: str) -> str:
+        return (raw.get(key) or "").strip()
+
+    return IngestRow(
+        term_de=val("term_de"),
+        artikel_nominativ=val("artikel_nominativ") or None,
+        definition_de=val("definition_de") or None,
+        sample_sentences_de=val("sample_sentences_de") or None,
+        translation_en=val("translation_en") or None,
+        definition_en=val("definition_en") or None,
+        pos=val("pos") or None,
+        source=val("source") or None,
+    )
 
 
 def _hash_text(text: str) -> str:
